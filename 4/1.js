@@ -7,10 +7,52 @@ const lineReader = readline.createInterface({
   input: file,
 });
 
-/* Plan:
-1. Read all the data into a new array
-2. Sort the data in my new array into chronological order
+const log = [];
+const guardActivityLog = {};
 
+const logParserRegex = /\[\d\d\d\d-(\d\d)-(\d\d)\s\d\d:(\d\d)]\s(.+)/;
+const guardIdentifierRegex = /Guard\s#(\d+)\s.+/;
+let currentGuardId = null;
+
+// 1. Read all the data into a new array
+// Be sure to strip out only the data needed.
+// We'll convert the strings into objects accordingly.
+function init() {
+  lineReader
+    .on('line', function(input) {
+      buildLog(input);
+    })
+    .on('close', function() {
+      // Sort by date and then by minute if necessary
+      log.sort(
+        (a, b) => (a.date != b.date ? a.date - b.date : a.minute - b.minute),
+      );
+    });
+}
+
+function buildLog(entry) {
+  const [match, month, day, minute, event] = entry.match(logParserRegex);
+
+  // Also determine the event type
+  let eventType = '';
+
+  if (event.match('begins shift')) eventType = 'begin';
+  else if (event.match('falls asleep')) eventType = 'sleep';
+  else if (event.match('wakes up')) eventType = 'wake';
+  else throw new Error('Event type not accounted for. Whoops.');
+
+  log.push({
+    date: Number(`${month}${day}`),
+    minute: Number(minute),
+    event: eventType,
+  });
+
+  console.log(log);
+}
+
+// 2. Sort the data in my new array into chronological order
+
+/*
 Example data:
     [1518-11-01 00:00] Guard #10 begins shift
     [1518-11-01 00:05] falls asleep // NOTE: this minute counts as "asleep"
@@ -68,3 +110,5 @@ for (let i = 0; i < array.length; i++) {
 })
 
 */
+
+init();

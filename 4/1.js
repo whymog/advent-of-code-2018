@@ -10,9 +10,8 @@ const lineReader = readline.createInterface({
 const log = [];
 const guardActivityLog = {};
 
-const logParserRegex = /\[\d\d\d\d-(\d\d)-(\d\d)\s\d\d:(\d\d)]\s(.+)/;
+const logParserRegex = /\[\d\d\d\d-(\d\d)-(\d\d)\s(\d\d):(\d\d)]\s(.+)/;
 const guardIdentifierRegex = /Guard\s#(\d+)\s.+/;
-let currentGuardId = null;
 
 // 1. Read all the data into a new array
 // Be sure to strip out only the data needed.
@@ -25,90 +24,117 @@ function init() {
     .on('close', function() {
       // Sort by date and then by minute if necessary
       log.sort(
-        (a, b) => (a.date != b.date ? a.date - b.date : a.minute - b.minute),
+        (a, b) => (a.date != b.date ? a.date - b.date : a.time - b.time),
       );
+
+      updateGuardActivityLog();
+
+      findSleepiestGuard();
     });
 }
 
 function buildLog(entry) {
-  const [match, month, day, minute, event] = entry.match(logParserRegex);
+  const [match, month, day, hours, minutes, event] = entry.match(
+    logParserRegex,
+  );
 
   // Also determine the event type
   let eventType = '';
+  let guardId = null;
 
-  if (event.match('begins shift')) eventType = 'begin';
-  else if (event.match('falls asleep')) eventType = 'sleep';
-  else if (event.match('wakes up')) eventType = 'wake';
-  else throw new Error('Event type not accounted for. Whoops.');
+  if (event.match('begins shift')) {
+    eventType = 'begin';
+    guardId = event.match(guardIdentifierRegex)[1];
+  } else if (event.match('falls asleep')) {
+    eventType = 'sleep';
+  } else if (event.match('wakes up')) {
+    eventType = 'wake';
+  } else throw new Error('Event type not accounted for. Whoops.');
 
   log.push({
     date: Number(`${month}${day}`),
-    minute: Number(minute),
+    time: Number(`${hours}${minutes}`),
     event: eventType,
+    guard: guardId,
+  });
+}
+
+function updateGuardActivityLog() {
+  // First, let's generate a new guard activity log.
+
+  // Next, we'll go ahead and update the values for each of those objects we
+  // created for each guard.
+  let currentGuardId = null;
+  // Read through each entry in succession and update the minutes they were
+  // asleep.
+  for (let i = 0; i < log.length; i++) {
+    if (!guardActivityLog[currentGuardId] && currentGuardId !== null) {
+      guardActivityLog[currentGuardId] = { totalTimeAsleep: 0 };
+    }
+
+    if (log[i].event === 'begin') {
+      currentGuardId = log[i].guard;
+    } else if (log[i].event === 'sleep') {
+      // Check the next entry to see wake time
+      // Sleep is start-time inclusive, end-time exclusive
+      const sleepStart = log[i].time;
+      const sleepEnd = log[i + 1].time;
+      for (let j = sleepStart; j < sleepEnd; j++) {
+        guardActivityLog[currentGuardId][j]
+          ? guardActivityLog[currentGuardId][j]++
+          : (guardActivityLog[currentGuardId][j] = 1);
+      }
+
+      // Finally, we'll save some time by increasing their total time asleep
+      guardActivityLog[currentGuardId].totalTimeAsleep += sleepEnd - sleepStart;
+
+      i++;
+    }
+  }
+}
+
+function findSleepiestGuard() {
+  const guards = Object.keys(guardActivityLog);
+  console.log(guards);
+
+  let sleepiestGuard = null;
+  let minutesAsleep = null;
+
+  guards.forEach(guard => {
+    if (guardActivityLog[guard].totalTimeAsleep > minutesAsleep) {
+      sleepiestGuard = guard;
+      minutesAsleep = guardActivityLog[guard].totalTimeAsleep;
+    }
   });
 
-  console.log(log);
+  console.log(
+    `The sleepiest guard is ${sleepiestGuard}, with ${minutesAsleep} minutes asleep on the job.`,
+  );
+
+  // Now find the mode minute the guard was asleep
+  let mode = 0;
+  let modeMinute = null;
+  const minutes = Object.keys(guardActivityLog[sleepiestGuard]);
+
+  minutes.forEach(minute => {
+    if (minute !== 'totalTimeAsleep') {
+      if (modeMinute === null) modeMinute = minute;
+      console.log(`${minute}: ${guardActivityLog[sleepiestGuard][minute]}`);
+      if (guardActivityLog[sleepiestGuard][minute] > mode) {
+        modeMinute = minute;
+        mode = guardActivityLog[sleepiestGuard][minute];
+      }
+    }
+  });
+
+  console.log(
+    `The sleepiest guard, #${sleepiestGuard}, was most often asleep on minute ${modeMinute} — a total of ${mode} times.`,
+  );
+
+  console.log(
+    `The answer to 4-1 is guardId * modeMinute, which is ${sleepiestGuard *
+      modeMinute}`,
+  );
 }
-
-// 2. Sort the data in my new array into chronological order
-
-/*
-Example data:
-    [1518-11-01 00:00] Guard #10 begins shift
-    [1518-11-01 00:05] falls asleep // NOTE: this minute counts as "asleep"
-    [1518-11-01 00:25] wakes up // NOTE: wake-up minutes count as "awake"
-
-All I need are the date (mm-dd), the guard ID, and the minutes of each event
-(mm). I need to sort them into chronological order to ensure that each event
-corresponds to the correct guard ID, since the ID is only given on the "begins
-shift" events. So I could build a new array of objects with this shape:
-
-[
-  {
-    date: {
-      month: "11",
-      day: "01",
-    },
-    guardId: 10,
-    eventType: "begin | sleep | awake"
-  }
-]
-
-Actually, since all the data seems to follow the pattern of
-"start -> sleep -> wake", maybe it'd be easier to just create a smaller array:
-
-[
-  {
-    date: "11-01",
-    guardId: 10,
-    fellAsleep: 5,
-    wokeUp: 25
-  } // ...
-]
-
-This would effectively shrink the number of items from the source data by a
-factor of 3.
-
-3. Once my new array is sorted, I can create a new data structure determining
-the sum total of minutes each guard is asleep across all nights. Something like:
-
-{
-  guard1: 678,
-  guard2: 383,
-  // ...
-}
-
-4. Now that I've determined the guard with the most minutes asleep, I can go
-back to my original array and get the *mode minute* that they're most frequently
-asleep during. Something like:
-
-for (let i = 0; i < array.length; i++) {
-  if (array[i].guardId === modeGuard) {
-    startMinute = array[i].minute;
-
-  }
-})
-
-*/
 
 init();
